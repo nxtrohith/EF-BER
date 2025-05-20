@@ -36,17 +36,6 @@ class EF_BER_Estimator:
         self.ber = 0.0
     
     def kmeans_bisection(self, data, target_clusters):
-        """
-        Implement K-means bisection clustering
-        This divides clusters recursively until reaching the target number of clusters
-        
-        Args:
-            data: Input data as numpy array
-            target_clusters: Number of clusters to generate
-        
-        Returns:
-            List of clusters, where each cluster is a list of data points
-        """
         # Start with all data in one cluster
         clusters = [data]
         
@@ -55,8 +44,7 @@ class EF_BER_Estimator:
             # Find the largest cluster to bisect
             largest_cluster_idx = np.argmax([len(cluster) for cluster in clusters])
             cluster_to_split = clusters.pop(largest_cluster_idx)
-            
-            # Skip if cluster is too small to split
+
             if len(cluster_to_split) < 2:
                 clusters.append(cluster_to_split)
                 continue
@@ -112,19 +100,8 @@ class EF_BER_Estimator:
         return clusters
     
     def is_pure_cluster(self, cluster, threshold=0.9):
-        """
-        Check if a cluster is pure (contains mostly the same label)
-        
-        Args:
-            cluster: List of data points
-            threshold: Purity threshold (default 0.9 or 90%)
-        
-        Returns:
-            Boolean indicating if the cluster is pure
-        """
         if len(cluster) == 0:
             return False
-            
         # Get labels for all points in cluster
         labels = [assign_label(point) for point in cluster]
         
@@ -146,12 +123,6 @@ class EF_BER_Estimator:
         return purity >= threshold
     
     def train(self, data):
-        """
-        Train the model using K-means bisection and KNN
-        
-        Args:
-            data: Input data as numpy array
-        """
         # Step 1: Load and label data
         start_time = time.time()
         labeled_data = [(x, assign_label(x)) for x in data]
@@ -217,15 +188,6 @@ class EF_BER_Estimator:
         print(f"BER: {self.ber:.4f} ({self.noise_count} noise points out of {self.total_count} total)")
     
     def predict(self, X):
-        """
-        Predict labels for new data points
-        
-        Args:
-            X: New data points as numpy array
-        
-        Returns:
-            Predicted labels
-        """
         if self.knn_model is None:
             raise Exception("Model not trained yet!")
         
@@ -235,12 +197,6 @@ class EF_BER_Estimator:
         return self.knn_model.predict(X_reshaped)
     
     def visualize_clusters(self, data):
-        """
-        Visualize the clusters and their labels
-        
-        Args:
-            data: Input data
-        """
         if not self.clusters:
             print("No clusters to visualize. Train the model first.")
             return
@@ -273,58 +229,49 @@ class EF_BER_Estimator:
         plt.grid(True, linestyle='--', alpha=0.7)
         
         # Add thresholds
-        plt.axvline(x=75, color='g', linestyle='--')
-        plt.axvline(x=150, color='y', linestyle='--')
-        plt.axvline(x=200, color='r', linestyle='--')
+        plt.axvline(x=75, color='g', linestyle=':')
+        plt.axvline(x=150, color='y', linestyle=':')
+        plt.axvline(x=200, color='r', linestyle=':')
         
         plt.tight_layout()
         plt.show()
 
 # Example usage with synthetic data (since actual data wasn't provided)
-def generate_sample_data(n_samples=200):
-    """
-    Generate sample water hardness data with some outliers
+# def generate_sample_data(n_samples=200):
+#     # Generate data in each category
+#     soft = np.random.normal(50, 15, int(n_samples * 0.3))
+#     soft = soft[(soft >= 0) & (soft <= 75)]  # Ensure values are in range
     
-    Args:
-        n_samples: Number of samples to generate
+#     moderate = np.random.normal(110, 20, int(n_samples * 0.4))
+#     moderate = moderate[(moderate > 75) & (moderate <= 150)]
     
-    Returns:
-        Numpy array of hardness values
-    """
-    # Generate data in each category
-    soft = np.random.normal(50, 15, int(n_samples * 0.3))
-    soft = soft[(soft >= 0) & (soft <= 75)]  # Ensure values are in range
+#     hard = np.random.normal(175, 15, int(n_samples * 0.2))
+#     hard = hard[(hard > 150) & (hard <= 200)]
     
-    moderate = np.random.normal(110, 20, int(n_samples * 0.4))
-    moderate = moderate[(moderate > 75) & (moderate <= 150)]
+#     very_hard = np.random.normal(230, 20, int(n_samples * 0.1))
+#     very_hard = very_hard[very_hard > 200]
     
-    hard = np.random.normal(175, 15, int(n_samples * 0.2))
-    hard = hard[(hard > 150) & (hard <= 200)]
+#     # Add some outliers
+#     outliers = np.array([250, 275, 300, 10, 5])
     
-    very_hard = np.random.normal(230, 20, int(n_samples * 0.1))
-    very_hard = very_hard[very_hard > 200]
+#     # Combine all data
+#     hardness_data = np.concatenate([soft, moderate, hard, very_hard, outliers])
     
-    # Add some outliers
-    outliers = np.array([250, 275, 300, 10, 5])
+#     # Shuffle data
+#     np.random.shuffle(hardness_data)
     
-    # Combine all data
-    hardness_data = np.concatenate([soft, moderate, hard, very_hard, outliers])
-    
-    # Shuffle data
-    np.random.shuffle(hardness_data)
-    
-    return hardness_data
+#     return hardness_data
 
 # Main execution
 if __name__ == "__main__":
     # Load your data here
     # Assuming data is in a CSV file with a column named 'hardness'
-    # df = pd.read_csv('water_hardness_data.csv')
-    # hardness_data = df['hardness'].values
-    
-    # For demonstration, we'll use synthetic data
-    print("Using synthetic data for demonstration...")
-    hardness_data = generate_sample_data(n_samples=200)
+    df = pd.read_csv('hardness_data.csv')
+    hardness_data = df['hardness'].values
+    mean_hardness = df['hardness'].mean()
+    std_hardness = df['hardness'].std()
+    print(f"Mean of the given data: {mean_hardness}")
+    print(f"Standard deviation of the given data: {std_hardness}")
     
     # Create and train the EF-BER estimator
     estimator = EF_BER_Estimator(k_clusters=4, k_neighbors=3)
