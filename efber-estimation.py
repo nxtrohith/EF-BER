@@ -266,10 +266,10 @@ class EF_BER_Estimator:
 if __name__ == "__main__":
     # Load your data here
     # Assuming data is in a CSV file with a column named 'hardness'
-    df = pd.read_csv('hardness_data.csv')
-    hardness_data = df['hardness'].values
-    mean_hardness = df['hardness'].mean()
-    std_hardness = df['hardness'].std()
+    df = pd.read_csv('water_potability.csv')
+    hardness_data = df['Hardness'].values
+    mean_hardness = df['Hardness'].mean()
+    std_hardness = df['Hardness'].std()
     print(f"Mean of the given data: {mean_hardness}")
     print(f"Standard deviation of the given data: {std_hardness}")
     
