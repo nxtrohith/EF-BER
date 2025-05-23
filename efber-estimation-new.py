@@ -9,11 +9,11 @@ import time
 
 # Define the labeling scheme based on Indian Standards (unchanged)
 def assign_label(hardness):
-    if hardness <= 75:
+    if hardness <= 100:
         return 'Soft'
-    elif hardness <= 150:
+    elif hardness <= 175:
         return 'Moderate'
-    elif hardness <= 200:
+    elif hardness <= 250:
         return 'Hard'
     else:
         return 'Very Hard'
