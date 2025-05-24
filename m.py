@@ -1,18 +1,19 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from collections import Counter
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import KFold
+# from sklearn.metrics import classification_report # Not used, so commented out for now
+from sklearn.model_selection import train_test_split, KFold
+import random
 import time
 import traceback # For more detailed error reporting in main
-
 
 # --- Global Helper Functions ---
 
 def assign_label(hardness):
     """
     Assigns a water hardness category based on Indian Standards.
+    (Kept as per original specification)
     """
     if hardness <= 100:
         return 'Soft'
@@ -23,7 +24,6 @@ def assign_label(hardness):
     else:
         return 'Very Hard'
 
-
 # --- TreeNode Class for K-means Bisection ---
 
 class TreeNode:
@@ -33,7 +33,7 @@ class TreeNode:
     """
     def __init__(self, data, is_leaf=True, left_child=None, right_child=None):
         # Ensure data is a numpy array, even if it's empty, for consistency
-        self.data = np.array(data, dtype=float) if data is not None and len(data) > 0 else np.array([], dtype=float)
+        self.data = np.array(data) if data is not None and len(data) > 0 else np.array([])
         self.is_leaf = is_leaf
         self.left_child = left_child
         self.right_child = right_child
@@ -41,7 +41,6 @@ class TreeNode:
     def __len__(self):
         """Helper to get the number of data points in this node's cluster."""
         return len(self.data)
-
 
 # --- Main Estimator Class ---
 
@@ -51,10 +50,6 @@ class EF_BER_Estimator:
     for clustering and a KNN classifier trained on 'pure' clusters.
     Includes 2-fold cross-validation for BER estimation.
     """
-    # Constants for the internal 2-means algorithm in kmeans_bisection
-    _KMEANS_MAX_ITER = 100
-    _KMEANS_CONVERGENCE_THRESH = 1e-6
-
     def __init__(self, k_clusters=4, k_neighbors=3):
         """
         Initializes the EF-BER estimator.
@@ -66,21 +61,25 @@ class EF_BER_Estimator:
         self.k_clusters = k_clusters
         self.k_neighbors = k_neighbors
         self.clusters = []  # Stores clusters from the final model (full dataset)
-        self.knn_model = None # KNN model trained on the full dataset        
+        self.knn_model = None # KNN model trained on the full dataset
+        
+        # For BER calculation based on the original method (full dataset)
         self.noise_count = 0
         self.total_count = 0
-        self.ber = 0.0         
+        self.ber = 0.0 
+        
+        # For BER estimated via cross-validation
         self.cv_ber_estimate = 0.0
+        
+        # self.tree_root = None # Optional: Could be used to store the root of the bisection tree
 
     def kmeans_bisection(self, data_points, target_clusters):
         """
         Performs K-means bisection to partition data_points into target_clusters.
-        Returns a list of numpy arrays, where each array represents a cluster of data points.
+        This method updates self.clusters with the generated clusters and also returns them.
         """
-        # Ensure data_points is a NumPy array for efficient processing
-        data_points = np.asarray(data_points, dtype=float)
-
         if data_points is None or len(data_points) == 0:
+            self.clusters = []
             return []
 
         # Initialize with all data in the root node
@@ -104,26 +103,34 @@ class EF_BER_Estimator:
             cluster_to_split_data = largest_leaf_node.data
             
             # --- Perform 2-means clustering on the selected cluster_to_split_data ---
+            # Randomly pick two initial centroids from the data
             initial_indices = np.random.choice(len(cluster_to_split_data), 2, replace=False)
             centroid_1 = cluster_to_split_data[initial_indices[0]]
             centroid_2 = cluster_to_split_data[initial_indices[1]]
             
-            # Initialize with empty arrays to ensure they are defined if loop doesn't run or fails early
-            final_sub_cluster_1_data = np.array([], dtype=float)
-            final_sub_cluster_2_data = np.array([], dtype=float)
+            max_iterations_2_means = 100  # Max iterations for 2-means convergence
+            convergence_threshold = 1e-6   # Threshold for centroid movement
+            
+            final_sub_cluster_1_data = []
+            final_sub_cluster_2_data = []
 
-            for i in range(self._KMEANS_MAX_ITER):
-                # Assign points to the nearest centroid
-                dist_to_c1 = np.abs(cluster_to_split_data - centroid_1)
-                dist_to_c2 = np.abs(cluster_to_split_data - centroid_2)
+            for i in range(max_iterations_2_means):
+                current_sub_cluster_1_data = []
+                current_sub_cluster_2_data = []
                 
-                assigned_to_c1 = dist_to_c1 <= dist_to_c2
-                current_sub_cluster_1_data = cluster_to_split_data[assigned_to_c1]
-                current_sub_cluster_2_data = cluster_to_split_data[~assigned_to_c1]
+                # Assign points to the nearest centroid
+                for point in cluster_to_split_data:
+                    dist_1 = np.abs(point - centroid_1) # Using absolute difference for 1D data
+                    dist_2 = np.abs(point - centroid_2)
+                    
+                    if dist_1 <= dist_2:
+                        current_sub_cluster_1_data.append(point)
+                    else:
+                        current_sub_cluster_2_data.append(point)
                 
                 # Handle cases where a sub-cluster might become empty during iteration
-                if len(current_sub_cluster_1_data) == 0 or len(current_sub_cluster_2_data) == 0:
-                    if i < self._KMEANS_MAX_ITER - 1: 
+                if not current_sub_cluster_1_data or not current_sub_cluster_2_data:
+                    if i < max_iterations_2_means - 1: 
                         # Try to recover by picking new random centroids if not the last iteration
                         new_indices = np.random.choice(len(cluster_to_split_data), 2, replace=False)
                         centroid_1 = cluster_to_split_data[new_indices[0]]
@@ -131,8 +138,8 @@ class EF_BER_Estimator:
                         continue # Restart this 2-means iteration with new centroids
                     else: 
                         # If it's the last iteration and a cluster is still empty, the split failed
-                        final_sub_cluster_1_data = np.array([], dtype=float) 
-                        final_sub_cluster_2_data = np.array([], dtype=float)
+                        final_sub_cluster_1_data = [] 
+                        final_sub_cluster_2_data = []
                         break # Exit 2-means loop
 
                 # Recalculate centroids
@@ -140,8 +147,8 @@ class EF_BER_Estimator:
                 new_centroid_2 = np.mean(current_sub_cluster_2_data)
                 
                 # Check for convergence
-                if np.abs(new_centroid_1 - centroid_1) < self._KMEANS_CONVERGENCE_THRESH and \
-                   np.abs(new_centroid_2 - centroid_2) < self._KMEANS_CONVERGENCE_THRESH:
+                if np.abs(new_centroid_1 - centroid_1) < convergence_threshold and \
+                   np.abs(new_centroid_2 - centroid_2) < convergence_threshold:
                     final_sub_cluster_1_data = current_sub_cluster_1_data
                     final_sub_cluster_2_data = current_sub_cluster_2_data
                     break # Converged
@@ -149,25 +156,27 @@ class EF_BER_Estimator:
                 centroid_1 = new_centroid_1
                 centroid_2 = new_centroid_2
                 
-                # If max_iterations is reached, use the current clustering from this iteration
-                if i == self._KMEANS_MAX_ITER - 1:
+                # If max_iterations is reached, use the current clustering
+                if i == max_iterations_2_means - 1:
                     final_sub_cluster_1_data = current_sub_cluster_1_data
                     final_sub_cluster_2_data = current_sub_cluster_2_data
             # --- End of 2-means clustering ---
 
             # If the split failed to produce two non-empty sub-clusters,
             # add the original node back as a leaf and try splitting another node.
-            if len(final_sub_cluster_1_data) == 0 or len(final_sub_cluster_2_data) == 0:
+            if not final_sub_cluster_1_data or not final_sub_cluster_2_data:
                 active_leaves.append(largest_leaf_node) # Add back, as it wasn't successfully split
                 continue # Move to the next iteration of the while loop
 
             # Split was successful, update the tree structure
             largest_leaf_node.is_leaf = False # This node is no longer a leaf
             
-            # final_sub_cluster_1_data and final_sub_cluster_2_data are already numpy arrays
-            child1 = TreeNode(data=final_sub_cluster_1_data, is_leaf=True)
-            child2 = TreeNode(data=final_sub_cluster_2_data, is_leaf=True)
+            child1_data = np.array(final_sub_cluster_1_data)
+            child2_data = np.array(final_sub_cluster_2_data)
 
+            child1 = TreeNode(data=child1_data, is_leaf=True)
+            child2 = TreeNode(data=child2_data, is_leaf=True)
+            
             largest_leaf_node.left_child = child1
             largest_leaf_node.right_child = child2
             
@@ -176,27 +185,36 @@ class EF_BER_Estimator:
                 active_leaves.append(child1)
             if len(child2) > 0:
                 active_leaves.append(child2)
-                
+        
+        # self.tree_root = root_node # Optionally store the tree if needed for other purposes
+        
         # Extract the data arrays from the final leaf nodes to form the clusters
         final_cluster_data_list = [leaf.data for leaf in active_leaves if len(leaf.data) > 0]
-        return final_cluster_data_list
+        
+        self.clusters = final_cluster_data_list # Update instance's clusters
+        return self.clusters # Also return the list of cluster data
     
     def is_pure_cluster(self, cluster_data, purity_threshold=0.9):
         """
         Checks if a given cluster is 'pure' based on the majority label.
         A cluster is pure if the proportion of the most common label exceeds purity_threshold.
         """
-        if not hasattr(cluster_data, '__len__') or len(cluster_data) == 0:
+        if len(cluster_data) == 0:
             return False # An empty cluster cannot be pure
             
-        # Ensure cluster_data is iterable if it's a 0-d numpy array from a single point cluster
-        if isinstance(cluster_data, np.ndarray) and cluster_data.ndim == 0:
-            labels_in_cluster = [assign_label(cluster_data.item())]
-        else:
-            labels_in_cluster = [assign_label(point) for point in cluster_data]
+        labels_in_cluster = [assign_label(point) for point in cluster_data]
+        
+        if not labels_in_cluster: return False # Should not happen if len(cluster_data)>0
 
-        label_counts = Counter(labels_in_cluster)
-        most_common_label_count = label_counts.most_common(1)[0][1]
+        label_counts = {}
+        for label in labels_in_cluster:
+            label_counts[label] = label_counts.get(label, 0) + 1
+            
+        most_common_label = max(label_counts, key=label_counts.get) if label_counts else None
+        
+        if not most_common_label: return False # Should not happen if labels_in_cluster is not empty
+            
+        most_common_label_count = label_counts[most_common_label]
         purity = most_common_label_count / len(cluster_data)
         
         return purity >= purity_threshold
@@ -210,7 +228,7 @@ class EF_BER_Estimator:
         overall_start_time = time.time()
         
         if not isinstance(data, np.ndarray):
-            data = np.array(data, dtype=float) # Ensure data is a NumPy array
+            data = np.array(data) # Ensure data is a NumPy array for easier handling
 
         # --- Part 1: 2-Fold Cross-Validation for BER Estimation ---
         print("\n--- Starting 2-Fold Cross-Validation for BER Estimation ---")
@@ -228,13 +246,16 @@ class EF_BER_Estimator:
                 fold_bers.append(np.nan) # Mark as NaN if fold can't be processed
                 continue
 
-            # 1a. Cluster the training data of the current fold
+            # 1a. Cluster the training data of the current fold using K-means bisection
+            print(f"({current_fold_label}): Running K-means bisection on training data ({len(data_train_fold)} points)...")
+            # Note: self.kmeans_bisection updates self.clusters, but for CV, we primarily use its return value.
+            # The final self.clusters will be set later when training on the full dataset.
             clusters_for_fold_training = self.kmeans_bisection(data_train_fold, self.k_clusters)
 
             # 1b. Identify pure clusters from the fold's training data
             pure_clusters_fold_train = []
             for cluster_item in clusters_for_fold_training:
-                if self.is_pure_cluster(cluster_item):
+                if self.is_pure_cluster(cluster_item): # is_pure_cluster takes cluster data directly
                     pure_clusters_fold_train.append(cluster_item)
             
             # 1c. Prepare training data for the fold's KNN model from these pure clusters
@@ -251,21 +272,23 @@ class EF_BER_Estimator:
                 if len(data_train_fold) > 0:
                     X_knn_train_fold = [[x_val] for x_val in data_train_fold]
                     y_knn_train_fold = [assign_label(x_val) for x_val in data_train_fold]
-                else:
+                else: # This case should be caught by the earlier check, but being defensive
                     print(f"Error ({current_fold_label}): Training data is empty when attempting to use all points. Skipping KNN.")
                     fold_bers.append(np.nan)
                     continue
             
-            if not X_knn_train_fold: 
+            if not X_knn_train_fold: # If still no data for KNN (e.g., data_train_fold was empty initially)
                  print(f"Warning ({current_fold_label}): No data available to train KNN model. Assigning max error (BER=1.0) for this fold.")
                  fold_bers.append(1.0) # Assume maximum error if KNN cannot be trained
                  continue
 
             # 1d. Train a KNN model for this fold
+            print(f"({current_fold_label}): Training KNN model on {len(X_knn_train_fold)} points derived from pure clusters (or all train data)...")
             knn_model_fold = KNeighborsClassifier(n_neighbors=self.k_neighbors)
             knn_model_fold.fit(X_knn_train_fold, y_knn_train_fold)
             
             # 1e. Evaluate this fold's KNN model on the fold's test data
+            print(f"({current_fold_label}): Evaluating KNN model on test data ({len(data_test_fold)} points)...")
             predictions_test_fold = knn_model_fold.predict(np.array(data_test_fold).reshape(-1, 1))
             actual_labels_test_fold = [assign_label(point) for point in data_test_fold]
             
@@ -294,7 +317,7 @@ class EF_BER_Estimator:
         
         # 2a. Perform K-means bisection on the entire dataset.
         # This will set self.clusters to be used by the final model and visualization.
-        print(f"Clustering full dataset ({len(data)} points)...")
+        print(f"Clustering full dataset ({len(data)} points) with K-means bisection...")
         self.clusters = self.kmeans_bisection(data, self.k_clusters) # self.clusters is now for the full dataset
         
         pure_clusters_full_data = []
@@ -320,7 +343,7 @@ class EF_BER_Estimator:
             if len(data) > 0:
                 X_train_final_knn = [[x_val] for x_val in data]
                 y_train_final_knn = [assign_label(x_val) for x_val in data]
-            else:
+            else: # This means original data was empty
                 print("Error (Full Dataset): Original data is empty. Cannot train final KNN model.")
                 self.ber = np.nan # Original BER
                 self.noise_count = 0
@@ -330,7 +353,7 @@ class EF_BER_Estimator:
                 print(f"Training process failed. Total time: {overall_end_time - overall_start_time:.4f} seconds")
                 return # Exit training
 
-        if not X_train_final_knn:
+        if not X_train_final_knn: # Should be caught if data was empty, but as a final check
              print("Error (Full Dataset): No data available for training the final KNN model (even after fallback).")
              self.ber = np.nan
              self.noise_count = 0
@@ -341,36 +364,43 @@ class EF_BER_Estimator:
              return
 
         # 2c. Train the final KNN model
-        print(f"Training final KNN model on {len(X_train_final_knn)} points (derived from pure clusters or all data)...")
+        print(f"Training final KNN model on {len(X_train_final_knn)} points from full dataset...")
         self.knn_model = KNeighborsClassifier(n_neighbors=self.k_neighbors)
         self.knn_model.fit(X_train_final_knn, y_train_final_knn)
         
         # 2d. Calculate BER using the original method (based on mixed clusters of the full dataset)
         # This BER is more of a 'training BER' based on the specific mixed/pure cluster logic.
-        self.noise_count = 0
-        num_points_in_mixed_clusters = 0
+        self.noise_count = 0 # Reset for final model's BER calculation
         
-        all_mixed_points_values = []
-        all_mixed_points_actual_labels = []
-
+        # Count errors only in mixed clusters (as per original BER definition)
+        num_points_in_mixed_clusters = 0
         for mixed_cluster_item in mixed_clusters_full_data:
             num_points_in_mixed_clusters += len(mixed_cluster_item)
-            for point_value in mixed_cluster_item:
-                all_mixed_points_values.append(point_value)
-                all_mixed_points_actual_labels.append(assign_label(point_value))
-        
-        if all_mixed_points_values:
-            mixed_points_for_knn_prediction = np.array(all_mixed_points_values).reshape(-1, 1)
-            predicted_labels_for_mixed = self.knn_model.predict(mixed_points_for_knn_prediction)
-            
-            for actual, predicted in zip(all_mixed_points_actual_labels, predicted_labels_for_mixed):
+            for point in mixed_cluster_item:
+                actual_label = assign_label(point)
+                # Use the final trained KNN model for prediction here
+                predicted_label = self.knn_model.predict([[point]])[0] 
                 if actual_label != predicted_label:
                     self.noise_count += 1
         
-        # Total count for original BER: sum of points in pure clusters (used for X_train_final_knn) 
-        # and points in mixed clusters. This should ideally sum to len(data).
+        # Total count for original BER: points in pure clusters + points in mixed clusters
         self.total_count = len(X_train_final_knn) + num_points_in_mixed_clusters
-
+        # A more robust way for total_count, assuming all points are covered by pure or mixed clusters:
+        # self.total_count = len(data) 
+        # However, the original code's self.total_count was specifically len(X_train_from_pure) + num_points_in_mixed
+        # Let's stick to the logic that reconstructs how original self.total_count was formed:
+        # self.noise_count is from mixed clusters.
+        # self.total_count (for BER) = (points in pure clusters used for KNN) + (points in mixed clusters).
+        # Note: If KNN was trained on *all* data (due to no pure clusters), X_train_final_knn would contain all points.
+        # In that case, num_points_in_mixed_clusters might be double-counting if mixed_clusters_full_data isn't empty.
+        # Let's simplify: the total_count for *this specific BER definition* should be all points that were categorized
+        # into pure (and thus used for KNN training) or mixed (and used for noise counting). This is effectively len(data).
+        # The previous code was:
+        # self.total_count = 0 (reset for current training)
+        # ... loop for mixed_clusters ... self.total_count +=1 for each point in mixed_clusters
+        # self.total_count += len(X_train)
+        # This is what I've replicated: self.total_count for BER = num_points_in_mixed_clusters + len(X_train_final_knn)
+        
         if self.total_count > 0:
             self.ber = self.noise_count / self.total_count 
         else:
@@ -383,7 +413,7 @@ class EF_BER_Estimator:
         
         print(f"\n--- BER Summary ---")
         print(f"BER (Original Method, Full Dataset): {self.ber:.4f}")
-        print(f"  (Noise: {self.noise_count} from mixed clusters / Total relevant points: {self.total_count})")
+        print(f"  (Calculated as {self.noise_count} errors from mixed clusters / {self.total_count} relevant points)")
         print(f"Estimated BER (2-Fold Cross-Validation): {self.cv_ber_estimate:.4f}")
 
     def predict(self, X_new_samples):
@@ -402,7 +432,7 @@ class EF_BER_Estimator:
         Visualizes the overall data distribution and the clusters found by
         K-means bisection on the full dataset.
         """
-        if not self.clusters:
+        if not self.clusters: # self.clusters should be from the final model on full data
             print("No clusters to visualize. Please train the model first, or training might have failed.")
             return
         
@@ -437,7 +467,7 @@ class EF_BER_Estimator:
         
         plt.title('Clusters from K-means Bisection (Full Dataset)')
         plt.xlabel('Hardness (ppm)')
-        plt.ylabel('Cluster Index (Y-axis for separation)')
+        plt.ylabel('Cluster Index (Y-axis for separation)') # More descriptive Y-label
         # Optional: plt.yticks([]) to remove y-axis ticks if they are not meaningful
         plt.grid(True, linestyle=':', alpha=0.5)
         if self.clusters: # Add legend only if there are clusters
@@ -448,9 +478,8 @@ class EF_BER_Estimator:
         plt.axvline(x=175, color='goldenrod', linestyle=':', alpha=0.6)
         plt.axvline(x=250, color='darkred', linestyle=':', alpha=0.6)
         
-        plt.tight_layout()
+        plt.tight_layout() # Adjusts plot parameters for a tight layout
         plt.show()
-
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
@@ -538,6 +567,7 @@ if __name__ == "__main__":
         label_counts_full_data = {}
         for label in labels_full_data:
             label_counts_full_data[label] = label_counts_full_data.get(label, 0) + 1
+        
         for label, count in sorted(label_counts_full_data.items()): # Sorted for consistent order
             print(f"{label}: {count} samples ({count/len(hardness_data)*100:.1f}%)")
         
