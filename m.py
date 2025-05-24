@@ -538,7 +538,6 @@ if __name__ == "__main__":
         label_counts_full_data = {}
         for label in labels_full_data:
             label_counts_full_data[label] = label_counts_full_data.get(label, 0) + 1
-        
         for label, count in sorted(label_counts_full_data.items()): # Sorted for consistent order
             print(f"{label}: {count} samples ({count/len(hardness_data)*100:.1f}%)")
         
