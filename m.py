@@ -259,7 +259,7 @@ class EF_BER_Estimator:
 if __name__ == "__main__":
     print("--- EF-BER Water Hardness Estimation (10-Fold CV) ---") # Updated title
     hardness_data, data_source_name = None, ""
-    primary_csv_path = 'water_potability.csv'
+    primary_csv_path = 'synthetic_water_dataset_2.csv'
 
     try:
         df = pd.read_csv(primary_csv_path)
