@@ -368,8 +368,7 @@ class EF_BER_Estimator:
         self.knn_model = KNeighborsClassifier(n_neighbors=self.k_neighbors)
         self.knn_model.fit(X_train_final_knn, y_train_final_knn)
         
-        # 2d. Calculate BER using the original method (based on mixed clusters of the full dataset)
-        # This BER is more of a 'training BER' based on the specific mixed/pure cluster logic.
+        # 2d. Calculate BER using the original method (based on mixed clusters of the full dataset)   # This BER is more of a 'training BER' based on the specific mixed/pure cluster logic.
         self.noise_count = 0 # Reset for final model's BER calculation
         
         # Count errors only in mixed clusters (as per original BER definition)
@@ -385,21 +384,6 @@ class EF_BER_Estimator:
         
         # Total count for original BER: points in pure clusters + points in mixed clusters
         self.total_count = len(X_train_final_knn) + num_points_in_mixed_clusters
-        # A more robust way for total_count, assuming all points are covered by pure or mixed clusters:
-        # self.total_count = len(data) 
-        # However, the original code's self.total_count was specifically len(X_train_from_pure) + num_points_in_mixed
-        # Let's stick to the logic that reconstructs how original self.total_count was formed:
-        # self.noise_count is from mixed clusters.
-        # self.total_count (for BER) = (points in pure clusters used for KNN) + (points in mixed clusters).
-        # Note: If KNN was trained on *all* data (due to no pure clusters), X_train_final_knn would contain all points.
-        # In that case, num_points_in_mixed_clusters might be double-counting if mixed_clusters_full_data isn't empty.
-        # Let's simplify: the total_count for *this specific BER definition* should be all points that were categorized
-        # into pure (and thus used for KNN training) or mixed (and used for noise counting). This is effectively len(data).
-        # The previous code was:
-        # self.total_count = 0 (reset for current training)
-        # ... loop for mixed_clusters ... self.total_count +=1 for each point in mixed_clusters
-        # self.total_count += len(X_train)
-        # This is what I've replicated: self.total_count for BER = num_points_in_mixed_clusters + len(X_train_final_knn)
         
         if self.total_count > 0:
             self.ber = self.noise_count / self.total_count 
