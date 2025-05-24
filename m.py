@@ -502,7 +502,6 @@ if __name__ == "__main__":
         print(f"An error occurred while loading '{primary_csv_path}': {e}")
         df = None
 
-    # If loading failed or resulted in no data, try a fallback or generate random data
     if hardness_data is None or len(hardness_data) < 10: # Need at least a few points for CV
         if hardness_data is None:
              print("Proceeding to generate random data for demonstration purposes.")
